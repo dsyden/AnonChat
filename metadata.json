@@ -1,0 +1,8 @@
+{
+  "name": "P2P Facetime Clone",
+  "description": "A frictionless, web-first 1-on-1 video chat application using direct P2P WebRTC.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
