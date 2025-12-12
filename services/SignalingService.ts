@@ -33,9 +33,40 @@ class SignalingService {
 
     console.log(`[Signaling] Connecting to room: ${roomId}`);
 
-    // Verify Supabase Realtime is available
-    const realtimeStatus = supabase.realtime.isConnected();
-    console.log('[Signaling] Realtime connection status:', realtimeStatus);
+    // Ensure Realtime connection is established first
+    // Broadcast channels don't need tables, but Realtime service must be connected
+    console.log('[Signaling] Checking Realtime connection...');
+    const isConnected = supabase.realtime.isConnected();
+    console.log('[Signaling] Initial connection status:', isConnected);
+    
+    if (!isConnected) {
+      console.log('[Signaling] Realtime not connected, waiting for connection...');
+      // Wait up to 5 seconds for Realtime to connect
+      let attempts = 0;
+      while (!supabase.realtime.isConnected() && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      
+      if (!supabase.realtime.isConnected()) {
+        console.error('[Signaling] ❌ Realtime failed to connect after 5 seconds');
+        console.error('[Signaling] This usually means:');
+        console.error('  1. Realtime is not enabled in Supabase Dashboard → Settings → API');
+        console.error('  2. Your Supabase project might be paused');
+        console.error('  3. Network/firewall blocking WebSocket connections');
+        throw new Error('Realtime service not connected. Check Supabase Realtime settings.');
+      }
+    }
+    
+    // Give it a moment to stabilize the connection
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // Verify connection is still stable
+    if (!supabase.realtime.isConnected()) {
+      throw new Error('Realtime connection lost after stabilization period');
+    }
+    
+    console.log('[Signaling] ✅ Realtime connection verified and stable');
 
     // Create a unique channel for the room
     // Use a simpler channel name format that's more reliable
@@ -56,11 +87,17 @@ class SignalingService {
       throw new Error('Failed to create channel. Check Supabase Realtime configuration.');
     }
 
+    // IMPORTANT: Set up event listeners BEFORE subscribing
     // Listen for the 'signal' event
     this.channel.on('broadcast', { event: 'signal' }, (payload) => {
       const message = payload.payload as SignalMessage;
       console.log(`[Signaling] Received ${message.type} from ${message.senderId}`);
       this.listeners.forEach((listener) => listener(message));
+    });
+
+    // Also listen for system events that might indicate issues
+    this.channel.on('system', {}, (payload) => {
+      console.log('[Signaling] System event:', payload);
     });
 
     // Subscribe and wait for subscription
@@ -83,23 +120,24 @@ class SignalingService {
         return;
       }
 
-      currentChannel
-        .subscribe((status, err) => {
-          hasReceivedStatus = true;
-          console.log(`[Signaling] Subscription status: ${status}`, err ? `Error: ${err}` : '');
-          console.log(`[Signaling] Channel state: ${currentChannel.state}`);
-          
-          if (!subscriptionAttempted) {
-            subscriptionAttempted = true;
-            console.log('[Signaling] Subscription attempt initiated');
-          }
+      // Subscribe to the channel
+      const subscription = currentChannel.subscribe((status, err) => {
+        hasReceivedStatus = true;
+        console.log(`[Signaling] Subscription status: ${status}`, err ? `Error: ${JSON.stringify(err)}` : '');
+        console.log(`[Signaling] Channel state: ${currentChannel.state}`);
+        console.log(`[Signaling] Realtime connected: ${supabase.realtime.isConnected()}`);
+        
+        if (!subscriptionAttempted) {
+          subscriptionAttempted = true;
+          console.log('[Signaling] Subscription attempt initiated');
+        }
 
-          if (status === 'SUBSCRIBED') {
-            clearTimeout(timeout);
-            console.log(`[Signaling] ✅ Connected to Supabase channel: ${channelName}`);
-            this.isSubscribed = true;
-            resolve();
-          } else if (status === 'CHANNEL_ERROR') {
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timeout);
+          console.log(`[Signaling] ✅ Connected to Supabase channel: ${channelName}`);
+          this.isSubscribed = true;
+          resolve();
+        } else if (status === 'CHANNEL_ERROR') {
             clearTimeout(timeout);
             const errorMsg = err?.message || 'Unknown error';
             console.error(`[Signaling] ❌ Channel error: ${errorMsg}`);
