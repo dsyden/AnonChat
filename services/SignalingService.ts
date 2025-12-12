@@ -123,11 +123,20 @@ class SignalingService {
             this.isSubscribed = false;
             reject(new Error('Subscription timed out. Check if Supabase Realtime is enabled.'));
           } else if (status === 'CLOSED') {
-            // Only reject if we haven't successfully subscribed first
-            // CLOSED can be called during cleanup, so we need to be careful
-            if (!this.isSubscribed && hasReceivedStatus) {
+            // If we were subscribed and then closed, this is unexpected
+            if (this.isSubscribed) {
               clearTimeout(timeout);
-              console.error(`[Signaling] ❌ Channel closed immediately`);
+              console.warn(`[Signaling] ⚠️ Channel closed after being subscribed`);
+              console.warn('[Signaling] This might be due to:');
+              console.warn('  1. Component re-render causing disconnect');
+              console.warn('  2. Network issue');
+              console.warn('  3. Supabase Realtime service issue');
+              // Don't reject - try to reconnect
+              this.isSubscribed = false;
+            } else if (hasReceivedStatus) {
+              // Closed before subscribing
+              clearTimeout(timeout);
+              console.error(`[Signaling] ❌ Channel closed before subscription`);
               console.error('[Signaling] This usually means:');
               console.error('  1. Realtime is not enabled in Supabase project');
               console.error('  2. Check Supabase Dashboard → Database → Replication');
@@ -137,7 +146,7 @@ class SignalingService {
                 console.error('[Signaling] Error details:', err);
               }
               this.isSubscribed = false;
-              reject(new Error('Channel closed immediately. Check Supabase Realtime settings in Database → Replication.'));
+              reject(new Error('Channel closed before subscription. Check Supabase Realtime settings.'));
             } else {
               // CLOSED during cleanup is normal, just log it
               console.log('[Signaling] Channel closed (cleanup)');
@@ -210,22 +219,18 @@ class SignalingService {
   }
 
   public async disconnect() {
-    // Don't disconnect if we're in the middle of subscribing
-    if (this.subscriptionPromise && !this.isSubscribed) {
-      console.log('[Signaling] Waiting for subscription to complete before disconnecting...');
-      try {
-        // Wait a short time for subscription, but don't block forever
-        await Promise.race([
-          this.subscriptionPromise,
-          new Promise(resolve => setTimeout(resolve, 1000))
-        ]);
-      } catch (err) {
-        // Ignore errors during cleanup
-      }
+    // Don't disconnect if we're actively using the channel
+    if (this.isSubscribed && this.channel) {
+      console.log('[Signaling] Disconnecting active channel...');
     }
 
     if (this.channel) {
       try {
+        // Unsubscribe first if channel is active
+        const channelState = this.channel.state;
+        if (channelState === 'joined') {
+          await this.channel.unsubscribe();
+        }
         await supabase.removeChannel(this.channel);
       } catch (err) {
         console.warn('[Signaling] Error removing channel:', err);

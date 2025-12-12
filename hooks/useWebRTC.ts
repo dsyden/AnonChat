@@ -252,7 +252,7 @@ export const useWebRTC = (roomId: string) => {
       pendingIceCandidatesRef.current = [];
       hasRemoteDescriptionRef.current = false;
     };
-  }, [roomId, createPeerConnection]);
+  }, [roomId]); // Removed createPeerConnection from deps to prevent re-renders
 
   // Initial Media Setup
   useEffect(() => {
