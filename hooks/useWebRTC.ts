@@ -17,6 +17,8 @@ export const useWebRTC = (roomId: string) => {
   const hasRemoteDescriptionRef = useRef<boolean>(false);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const isConnectedRef = useRef<boolean>(false);
+  const isConnectingRef = useRef<boolean>(false);
   
   // Initialize Peer Connection
   const createPeerConnection = useCallback(() => {
@@ -74,16 +76,21 @@ export const useWebRTC = (roomId: string) => {
       console.log('[WebRTC] Connection state:', state);
       switch (state) {
         case 'connected':
+          isConnectedRef.current = true;
+          isConnectingRef.current = false;
           setPeerState({ isConnected: true, isConnecting: false, error: null });
           break;
         case 'disconnected':
         case 'failed':
         case 'closed':
            // If we lose connection, we reset remote stream but keep local
+          isConnectedRef.current = false;
+          isConnectingRef.current = false;
           setPeerState({ isConnected: false, isConnecting: false, error: `Connection ${state}` });
           setRemoteStream(null);
           break;
         case 'connecting':
+          isConnectingRef.current = true;
           setPeerState(prev => ({ ...prev, isConnecting: true }));
           break;
       }
@@ -127,25 +134,7 @@ export const useWebRTC = (roomId: string) => {
   useEffect(() => {
     let isMounted = true;
 
-    const setupSignaling = async () => {
-      try {
-        await signalingService.connect(roomId);
-        
-        // Wait a bit to ensure we're subscribed, then announce presence
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        if (isMounted) {
-          // Announce presence
-          await signalingService.send({ type: 'join' });
-        }
-      } catch (err) {
-        console.error('[WebRTC] Failed to connect to signaling service', err);
-        setPeerState(prev => ({ ...prev, error: 'Failed to connect to signaling service' }));
-      }
-    };
-
-    setupSignaling();
-
+    // Set up message handler FIRST, before connecting
     const cleanupListener = signalingService.onMessage(async (msg) => {
       if (!isMounted) return;
 
@@ -218,8 +207,16 @@ export const useWebRTC = (roomId: string) => {
               console.log('[Signaling] Peer joined, creating offer (impolite peer)');
               isHostRef.current = true;
               
-              // Update state to show we're connecting
-              setPeerState(prev => ({ ...prev, isConnecting: true, error: null }));
+              // Update state to show we're connecting - this will update the UI
+              isConnectingRef.current = true;
+              isConnectedRef.current = false;
+              setPeerState(prev => ({ 
+                ...prev, 
+                isConnecting: true, 
+                error: null,
+                isConnected: false 
+              }));
+              console.log('[Signaling] ✅ Updated state to connecting - UI should update now');
               
               try {
                 // Ensure local stream tracks are added to peer connection
@@ -256,7 +253,9 @@ export const useWebRTC = (roomId: string) => {
               console.log('[Signaling] Peer joined, waiting for offer (polite peer)');
               isHostRef.current = false;
               // Update state to show we're waiting for connection
+              isConnectingRef.current = true;
               setPeerState(prev => ({ ...prev, isConnecting: true }));
+              console.log('[Signaling] ✅ Updated state to connecting (polite peer) - UI should update now');
             }
             break;
 
@@ -392,9 +391,42 @@ export const useWebRTC = (roomId: string) => {
       }
     });
 
+    const setupSignaling = async () => {
+      try {
+        await signalingService.connect(roomId);
+        
+        // Wait a bit to ensure we're subscribed, then announce presence
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        if (isMounted) {
+          // Announce presence - send join message
+          console.log('[Signaling] Announcing presence in room...');
+          await signalingService.send({ type: 'join' });
+          console.log('[Signaling] ✅ Join message sent');
+        }
+      } catch (err) {
+        console.error('[WebRTC] Failed to connect to signaling service', err);
+        setPeerState(prev => ({ ...prev, error: 'Failed to connect to signaling service' }));
+      }
+    };
+
+    setupSignaling();
+    
+    // Also set up a periodic join message resend in case the other person missed it
+    // This helps when the first person joins before the second person subscribes
+    const joinResendInterval = setInterval(() => {
+      if (isMounted && !isConnectedRef.current && !isConnectingRef.current) {
+        console.log('[Signaling] Resending join message (no connection yet)...');
+        signalingService.send({ type: 'join' }).catch(err => {
+          console.warn('[Signaling] Failed to resend join:', err);
+        });
+      }
+    }, 2000); // Resend every 2 seconds if not connected
+
     return () => {
       console.log('[WebRTC] Cleaning up signaling and peer connection...');
       isMounted = false;
+      clearInterval(joinResendInterval);
       
       // Send leave message before disconnecting
       try {
