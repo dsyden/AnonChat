@@ -139,6 +139,12 @@ export const useWebRTC = (roomId: string) => {
       try {
         switch (msg.type) {
           case 'join':
+            // Ignore our own join messages
+            if (msg.senderId === signalingService.userId) {
+              console.log('[Signaling] Ignoring own join message');
+              break;
+            }
+            
             // Polite peer strategy: user with smaller ID becomes the "polite" peer (answers)
             // User with larger ID becomes the "impolite" peer (creates offer)
             const otherUserId = msg.senderId;
@@ -147,10 +153,19 @@ export const useWebRTC = (roomId: string) => {
             
             console.log(`[Signaling] Join received - My ID: ${myUserId}, Other ID: ${otherUserId}, Is Polite: ${isPolite}`);
             
+            // Check if we already have a connection in progress
+            if (pc.signalingState !== 'stable' && pc.signalingState !== 'closed') {
+              console.log(`[Signaling] Connection already in progress (state: ${pc.signalingState}), ignoring join`);
+              break;
+            }
+            
             if (!isPolite) {
               // We are the impolite peer, create offer
               console.log('[Signaling] Peer joined, creating offer (impolite peer)');
               isHostRef.current = true;
+              
+              // Update state to show we're connecting
+              setPeerState(prev => ({ ...prev, isConnecting: true, error: null }));
               
               try {
                 // Ensure local stream tracks are added to peer connection
@@ -186,16 +201,31 @@ export const useWebRTC = (roomId: string) => {
               // We are the polite peer, wait for offer
               console.log('[Signaling] Peer joined, waiting for offer (polite peer)');
               isHostRef.current = false;
+              // Update state to show we're waiting for connection
+              setPeerState(prev => ({ ...prev, isConnecting: true }));
             }
             break;
 
           case 'offer':
             console.log('[Signaling] Received offer');
             
+            // Update state to show we're connecting
+            setPeerState(prev => ({ ...prev, isConnecting: true, error: null }));
+            
             // Handle glare situation (both peers create offers simultaneously)
             if (pc.signalingState !== 'stable') {
               console.log('[Signaling] Glare detected, rolling back');
               await pc.setLocalDescription({ type: 'rollback' });
+            }
+            
+            // Ensure local stream tracks are added before answering
+            const currentLocalStreamForAnswer = localStreamRef.current;
+            if (currentLocalStreamForAnswer && pc.getSenders().length === 0) {
+              console.log('[Signaling] Adding local stream tracks before answering...');
+              currentLocalStreamForAnswer.getTracks().forEach(track => {
+                pc.addTrack(track, currentLocalStreamForAnswer);
+                console.log(`[Signaling] Added ${track.kind} track`);
+              });
             }
             
             await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
