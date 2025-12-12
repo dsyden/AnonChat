@@ -120,6 +120,8 @@ export const useWebRTC = (roomId: string) => {
     const cleanupListener = signalingService.onMessage(async (msg) => {
       if (!isMounted) return;
 
+      console.log(`[Signaling] Received message type: ${msg.type} from ${msg.senderId}`);
+
       // Wait for local stream if it's not ready yet (for creating offers with media)
       if (msg.type === 'join' && !localStreamRef.current) {
         console.log('[Signaling] Waiting for local stream before handling join...');
@@ -134,7 +136,13 @@ export const useWebRTC = (roomId: string) => {
         }
       }
 
-      const pc = peerConnectionRef.current || createPeerConnection();
+      let pc = peerConnectionRef.current;
+      if (!pc) {
+        console.log('[Signaling] No peer connection exists, creating one...');
+        pc = createPeerConnection();
+      } else {
+        console.log(`[Signaling] Using existing peer connection (state: ${pc.signalingState})`);
+      }
 
       try {
         switch (msg.type) {
@@ -152,11 +160,27 @@ export const useWebRTC = (roomId: string) => {
             const isPolite = myUserId > otherUserId;
             
             console.log(`[Signaling] Join received - My ID: ${myUserId}, Other ID: ${otherUserId}, Is Polite: ${isPolite}`);
+            console.log(`[Signaling] Current peer connection state: ${pc.signalingState}`);
             
-            // Check if we already have a connection in progress
-            if (pc.signalingState !== 'stable' && pc.signalingState !== 'closed') {
+            // Only skip if we're already in the middle of an offer/answer exchange
+            // Allow if we're in 'stable' or 'closed' state (ready for new connection)
+            const isInProgress = pc.signalingState === 'have-local-offer' || 
+                                pc.signalingState === 'have-remote-offer' || 
+                                pc.signalingState === 'have-local-pranswer' || 
+                                pc.signalingState === 'have-remote-pranswer';
+            
+            if (isInProgress) {
               console.log(`[Signaling] Connection already in progress (state: ${pc.signalingState}), ignoring join`);
               break;
+            }
+            
+            // If connection is closed, create a new one
+            let activePc = pc;
+            if (pc.signalingState === 'closed') {
+              console.log('[Signaling] Previous connection closed, creating new peer connection');
+              peerConnectionRef.current = null;
+              activePc = createPeerConnection();
+              pc = activePc; // Update pc reference for rest of handler
             }
             
             if (!isPolite) {
@@ -170,10 +194,10 @@ export const useWebRTC = (roomId: string) => {
               try {
                 // Ensure local stream tracks are added to peer connection
                 const currentLocalStream = localStreamRef.current;
-                if (currentLocalStream && pc.getSenders().length === 0) {
+                if (currentLocalStream && activePc.getSenders().length === 0) {
                   console.log('[Signaling] Adding local stream tracks to peer connection...');
                   currentLocalStream.getTracks().forEach(track => {
-                    pc.addTrack(track, currentLocalStream);
+                    activePc.addTrack(track, currentLocalStream);
                     console.log(`[Signaling] Added ${track.kind} track`);
                   });
                 } else if (!currentLocalStream) {
@@ -181,15 +205,15 @@ export const useWebRTC = (roomId: string) => {
                 }
                 
                 // Make sure we're in stable state
-                if (pc.signalingState !== 'stable') {
+                if (activePc.signalingState !== 'stable') {
                   console.log('[Signaling] Not in stable state, rolling back');
-                  await pc.setLocalDescription({ type: 'rollback' });
+                  await activePc.setLocalDescription({ type: 'rollback' });
                 }
                 
                 console.log('[Signaling] Creating WebRTC offer...');
-                const offer = await pc.createOffer();
+                const offer = await activePc.createOffer();
                 console.log('[Signaling] Offer created, setting local description...');
-                await pc.setLocalDescription(offer);
+                await activePc.setLocalDescription(offer);
                 console.log('[Signaling] Sending offer to peer...');
                 await signalingService.send({ type: 'offer', payload: offer });
                 console.log('[Signaling] ✅ Offer sent successfully');
