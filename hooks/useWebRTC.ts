@@ -15,6 +15,7 @@ export const useWebRTC = (roomId: string) => {
   const isHostRef = useRef<boolean>(false);
   const pendingIceCandidatesRef = useRef<RTCIceCandidate[]>([]);
   const hasRemoteDescriptionRef = useRef<boolean>(false);
+  const localStreamRef = useRef<MediaStream | null>(null);
   
   // Initialize Peer Connection
   const createPeerConnection = useCallback(() => {
@@ -119,6 +120,20 @@ export const useWebRTC = (roomId: string) => {
     const cleanupListener = signalingService.onMessage(async (msg) => {
       if (!isMounted) return;
 
+      // Wait for local stream if it's not ready yet (for creating offers with media)
+      if (msg.type === 'join' && !localStreamRef.current) {
+        console.log('[Signaling] Waiting for local stream before handling join...');
+        // Wait up to 3 seconds for local stream
+        let attempts = 0;
+        while (!localStreamRef.current && attempts < 30) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+        if (!localStreamRef.current) {
+          console.warn('[Signaling] Local stream not ready, proceeding without media tracks');
+        }
+      }
+
       const pc = peerConnectionRef.current || createPeerConnection();
 
       try {
@@ -127,21 +142,46 @@ export const useWebRTC = (roomId: string) => {
             // Polite peer strategy: user with smaller ID becomes the "polite" peer (answers)
             // User with larger ID becomes the "impolite" peer (creates offer)
             const otherUserId = msg.senderId;
-            const isPolite = signalingService.userId > otherUserId;
+            const myUserId = signalingService.userId;
+            const isPolite = myUserId > otherUserId;
+            
+            console.log(`[Signaling] Join received - My ID: ${myUserId}, Other ID: ${otherUserId}, Is Polite: ${isPolite}`);
             
             if (!isPolite) {
               // We are the impolite peer, create offer
               console.log('[Signaling] Peer joined, creating offer (impolite peer)');
               isHostRef.current = true;
               
-              // Make sure we're in stable state
-              if (pc.signalingState !== 'stable') {
-                await pc.setLocalDescription({ type: 'rollback' });
+              try {
+                // Ensure local stream tracks are added to peer connection
+                const currentLocalStream = localStreamRef.current;
+                if (currentLocalStream && pc.getSenders().length === 0) {
+                  console.log('[Signaling] Adding local stream tracks to peer connection...');
+                  currentLocalStream.getTracks().forEach(track => {
+                    pc.addTrack(track, currentLocalStream);
+                    console.log(`[Signaling] Added ${track.kind} track`);
+                  });
+                } else if (!currentLocalStream) {
+                  console.warn('[Signaling] No local stream available, creating offer without media');
+                }
+                
+                // Make sure we're in stable state
+                if (pc.signalingState !== 'stable') {
+                  console.log('[Signaling] Not in stable state, rolling back');
+                  await pc.setLocalDescription({ type: 'rollback' });
+                }
+                
+                console.log('[Signaling] Creating WebRTC offer...');
+                const offer = await pc.createOffer();
+                console.log('[Signaling] Offer created, setting local description...');
+                await pc.setLocalDescription(offer);
+                console.log('[Signaling] Sending offer to peer...');
+                await signalingService.send({ type: 'offer', payload: offer });
+                console.log('[Signaling] ✅ Offer sent successfully');
+              } catch (err) {
+                console.error('[Signaling] ❌ Error creating/sending offer:', err);
+                setPeerState(prev => ({ ...prev, error: `Failed to create offer: ${err}` }));
               }
-              
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              await signalingService.send({ type: 'offer', payload: offer });
             } else {
               // We are the polite peer, wait for offer
               console.log('[Signaling] Peer joined, waiting for offer (polite peer)');
@@ -263,6 +303,7 @@ export const useWebRTC = (roomId: string) => {
           audio: true,
         });
         setLocalStream(stream);
+        localStreamRef.current = stream; // Update ref for message handler
       } catch (e) {
         console.error('Error accessing media devices.', e);
         setPeerState(prev => ({ ...prev, error: 'Camera/Mic access denied' }));
