@@ -219,29 +219,42 @@ class SignalingService {
   }
 
   public async disconnect() {
-    // Don't disconnect if we're actively using the channel
-    if (this.isSubscribed && this.channel) {
-      console.log('[Signaling] Disconnecting active channel...');
+    console.log('[Signaling] Disconnecting...');
+    
+    // Send leave message if we're in a room
+    if (this.isSubscribed && this.channel && this.roomId) {
+      try {
+        console.log('[Signaling] Sending leave message...');
+        await this.send({ type: 'leave' });
+        // Give it a moment to send
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (err) {
+        console.warn('[Signaling] Error sending leave message:', err);
+      }
     }
 
     if (this.channel) {
       try {
         // Unsubscribe first if channel is active
         const channelState = this.channel.state;
-        if (channelState === 'joined') {
+        console.log(`[Signaling] Channel state before disconnect: ${channelState}`);
+        if (channelState === 'joined' || channelState === 'joining') {
+          console.log('[Signaling] Unsubscribing from channel...');
           await this.channel.unsubscribe();
         }
+        console.log('[Signaling] Removing channel...');
         await supabase.removeChannel(this.channel);
       } catch (err) {
         console.warn('[Signaling] Error removing channel:', err);
       }
       this.channel = null;
     }
+    
     this.listeners = [];
     this.roomId = null;
     this.isSubscribed = false;
     this.subscriptionPromise = null;
-    console.log('[Signaling] Disconnected');
+    console.log('[Signaling] ✅ Disconnected');
   }
 }
 

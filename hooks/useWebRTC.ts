@@ -342,17 +342,34 @@ export const useWebRTC = (roomId: string) => {
             
           case 'leave':
             console.log('[Signaling] Peer left');
+            
+            // Stop remote stream tracks
+            if (remoteStreamRef.current) {
+              remoteStreamRef.current.getTracks().forEach(track => track.stop());
+              remoteStreamRef.current = null;
+            }
             setRemoteStream(null);
             setPeerState({ isConnected: false, isConnecting: false, error: 'Peer disconnected' });
+            
+            // Clean up peer connection
             if (peerConnectionRef.current) {
-                peerConnectionRef.current.close();
-                peerConnectionRef.current = null;
+              console.log('[Signaling] Closing peer connection after peer left...');
+              // Stop all senders
+              peerConnectionRef.current.getSenders().forEach(sender => {
+                if (sender.track) {
+                  sender.track.stop();
+                }
+              });
+              peerConnectionRef.current.close();
+              peerConnectionRef.current = null;
             }
-            // Re-initialize for next person
-            peerConnectionRef.current = null;
+            
+            // Reset state for next person
             hasRemoteDescriptionRef.current = false;
             pendingIceCandidatesRef.current = [];
-            createPeerConnection();
+            
+            // Create new peer connection for next person
+            console.log('[Signaling] Ready for next peer to join');
             break;
             
           case 'kick':
@@ -376,16 +393,48 @@ export const useWebRTC = (roomId: string) => {
     });
 
     return () => {
+      console.log('[WebRTC] Cleaning up signaling and peer connection...');
       isMounted = false;
-      cleanupListener();
-      signalingService.disconnect();
+      
+      // Send leave message before disconnecting
+      try {
+        signalingService.send({ type: 'leave' });
+      } catch (err) {
+        console.warn('[WebRTC] Error sending leave message:', err);
+      }
+      
+      // Clean up peer connection
       if (peerConnectionRef.current) {
+        console.log('[WebRTC] Closing peer connection...');
+        // Stop all senders
+        peerConnectionRef.current.getSenders().forEach(sender => {
+          if (sender.track) {
+            sender.track.stop();
+          }
+        });
+        // Close the connection
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
       }
+      
+      // Stop remote stream tracks
+      if (remoteStreamRef.current) {
+        console.log('[WebRTC] Stopping remote stream tracks...');
+        remoteStreamRef.current.getTracks().forEach(track => track.stop());
+        remoteStreamRef.current = null;
+      }
+      
+      // Clean up signaling
+      cleanupListener();
+      signalingService.disconnect();
+      
+      // Reset state
       pendingIceCandidatesRef.current = [];
       hasRemoteDescriptionRef.current = false;
-      remoteStreamRef.current = null;
+      setRemoteStream(null);
+      setPeerState({ isConnected: false, isConnecting: false, error: null });
+      
+      console.log('[WebRTC] Cleanup complete');
     };
   }, [roomId]); // Removed createPeerConnection from deps to prevent re-renders
 
@@ -408,10 +457,21 @@ export const useWebRTC = (roomId: string) => {
     startLocalVideo();
 
     return () => {
-      // Stop all tracks on unmount
+      console.log('[WebRTC] Cleaning up local media stream...');
+      // Stop all tracks on unmount - use ref to avoid stale closure
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          console.log(`[WebRTC] Stopping ${track.kind} track`);
+          track.stop();
+        });
+        localStreamRef.current = null;
+      }
+      // Also stop state stream if it exists
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
+      setLocalStream(null);
+      console.log('[WebRTC] Local media cleanup complete');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
