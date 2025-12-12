@@ -40,8 +40,9 @@ export const useWebRTC = (roomId: string) => {
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('[WebRTC] Connection state:', pc.connectionState);
-      switch (pc.connectionState) {
+      const state = pc.connectionState;
+      console.log('[WebRTC] Connection state:', state);
+      switch (state) {
         case 'connected':
           setPeerState({ isConnected: true, isConnecting: false, error: null });
           break;
@@ -49,13 +50,36 @@ export const useWebRTC = (roomId: string) => {
         case 'failed':
         case 'closed':
            // If we lose connection, we reset remote stream but keep local
-          setPeerState({ isConnected: false, isConnecting: false, error: 'Connection lost' });
+          setPeerState({ isConnected: false, isConnecting: false, error: `Connection ${state}` });
           setRemoteStream(null);
           break;
         case 'connecting':
           setPeerState(prev => ({ ...prev, isConnecting: true }));
           break;
       }
+    };
+
+    // Monitor ICE connection state
+    pc.oniceconnectionstatechange = () => {
+      const iceState = pc.iceConnectionState;
+      console.log('[WebRTC] ICE connection state:', iceState);
+      if (iceState === 'failed' || iceState === 'disconnected') {
+        console.warn('[WebRTC] ICE connection issue:', iceState);
+        setPeerState(prev => ({ 
+          ...prev, 
+          error: `ICE connection ${iceState}. This may indicate NAT traversal issues.` 
+        }));
+      }
+    };
+
+    // Monitor ICE gathering state
+    pc.onicegatheringstatechange = () => {
+      console.log('[WebRTC] ICE gathering state:', pc.iceGatheringState);
+    };
+
+    // Log ICE candidates for debugging
+    pc.onicecandidateerror = (event) => {
+      console.error('[WebRTC] ICE candidate error:', event);
     };
 
     // Add local tracks if stream exists

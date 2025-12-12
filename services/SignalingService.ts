@@ -44,16 +44,24 @@ class SignalingService {
 
     // Subscribe and wait for subscription
     this.subscriptionPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        console.error('[Signaling] Subscription timeout after 10 seconds');
+        reject(new Error('Subscription timeout'));
+      }, 10000);
+
       this.channel!
         .subscribe((status) => {
+          console.log(`[Signaling] Subscription status: ${status}`);
           if (status === 'SUBSCRIBED') {
-            console.log(`[Signaling] Connected to Supabase channel: room:${roomId}`);
+            clearTimeout(timeout);
+            console.log(`[Signaling] ✅ Connected to Supabase channel: room:${roomId}`);
             this.isSubscribed = true;
             resolve();
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.error(`[Signaling] Failed to subscribe: ${status}`);
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            clearTimeout(timeout);
+            console.error(`[Signaling] ❌ Failed to subscribe: ${status}`);
             this.isSubscribed = false;
-            reject(new Error(`Failed to subscribe: ${status}`));
+            reject(new Error(`Failed to subscribe: ${status}. Check if Supabase Realtime is enabled.`));
           }
         });
     });
@@ -88,14 +96,20 @@ class SignalingService {
       senderId: this.userId,
     };
 
-    const result = await this.channel.send({
-      type: 'broadcast',
-      event: 'signal',
-      payload: fullMessage,
-    });
+    try {
+      const result = await this.channel.send({
+        type: 'broadcast',
+        event: 'signal',
+        payload: fullMessage,
+      });
 
-    if (result === 'error') {
-      console.error('[Signaling] Failed to send message');
+      if (result === 'error') {
+        console.error('[Signaling] ❌ Failed to send message:', message.type);
+      } else {
+        console.log(`[Signaling] ✅ Sent ${message.type} message`);
+      }
+    } catch (err) {
+      console.error('[Signaling] ❌ Error sending message:', err, message);
     }
   }
 
