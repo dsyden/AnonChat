@@ -61,7 +61,12 @@ export const useWebRTC = (roomId: string) => {
       }
       
       console.log('[WebRTC] Remote stream now has tracks:', stream.getTracks().map(t => `${t.kind}:${t.id}:${t.enabled ? 'enabled' : 'disabled'}`));
-      setRemoteStream(stream);
+      
+      // Force React to update by creating a new stream reference
+      const streamToSet = new MediaStream(stream.getTracks());
+      remoteStreamRef.current = streamToSet;
+      setRemoteStream(streamToSet);
+      console.log('[WebRTC] ✅ Remote stream updated in state');
     };
 
     pc.onconnectionstatechange = () => {
@@ -169,6 +174,7 @@ export const useWebRTC = (roomId: string) => {
       }
 
       try {
+        console.log(`[Signaling] Processing message: ${msg.type} from ${msg.senderId}, my ID: ${signalingService.userId}`);
         switch (msg.type) {
           case 'join':
             // Ignore our own join messages
@@ -356,6 +362,16 @@ export const useWebRTC = (roomId: string) => {
         }
       } catch (err) {
         console.error('[WebRTC] Signaling error', err);
+        console.error('[WebRTC] Error details:', {
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          msgType: msg.type,
+          senderId: msg.senderId
+        });
+        setPeerState(prev => ({ 
+          ...prev, 
+          error: `Signaling error: ${err instanceof Error ? err.message : String(err)}` 
+        }));
       }
     });
 
