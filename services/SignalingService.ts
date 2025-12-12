@@ -33,40 +33,9 @@ class SignalingService {
 
     console.log(`[Signaling] Connecting to room: ${roomId}`);
 
-    // Ensure Realtime connection is established first
-    // Broadcast channels don't need tables, but Realtime service must be connected
-    console.log('[Signaling] Checking Realtime connection...');
-    const isConnected = supabase.realtime.isConnected();
-    console.log('[Signaling] Initial connection status:', isConnected);
-    
-    if (!isConnected) {
-      console.log('[Signaling] Realtime not connected, waiting for connection...');
-      // Wait up to 5 seconds for Realtime to connect
-      let attempts = 0;
-      while (!supabase.realtime.isConnected() && attempts < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      
-      if (!supabase.realtime.isConnected()) {
-        console.error('[Signaling] ❌ Realtime failed to connect after 5 seconds');
-        console.error('[Signaling] This usually means:');
-        console.error('  1. Realtime is not enabled in Supabase Dashboard → Settings → API');
-        console.error('  2. Your Supabase project might be paused');
-        console.error('  3. Network/firewall blocking WebSocket connections');
-        throw new Error('Realtime service not connected. Check Supabase Realtime settings.');
-      }
-    }
-    
-    // Give it a moment to stabilize the connection
-    await new Promise(resolve => setTimeout(resolve, 200));
-    
-    // Verify connection is still stable
-    if (!supabase.realtime.isConnected()) {
-      throw new Error('Realtime connection lost after stabilization period');
-    }
-    
-    console.log('[Signaling] ✅ Realtime connection verified and stable');
+    // Note: Realtime connection is established automatically when we subscribe to a channel
+    // We don't need to check isConnected() beforehand - it will connect during subscription
+    console.log('[Signaling] Creating channel (Realtime will connect automatically)...');
 
     // Create a unique channel for the room
     // Use a simpler channel name format that's more reliable
