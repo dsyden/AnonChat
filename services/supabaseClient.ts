@@ -48,12 +48,27 @@ console.log('[Supabase] Initialized');
 console.log('[Supabase] URL:', SUPABASE_URL ? `✅ ${SUPABASE_URL.substring(0, 30)}...` : '❌ Missing');
 console.log('[Supabase] Anon Key:', SUPABASE_ANON_KEY ? '✅ Set' : '❌ Missing');
 
-// Test Supabase connection (async, don't block)
+// Test Supabase connection and Realtime availability
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   (async () => {
     try {
-      // Just verify the client was created successfully
       console.log('[Supabase] ✅ Client initialized successfully');
+      
+      // Check if Realtime is available
+      const realtime = supabase.realtime;
+      console.log('[Supabase] Realtime available:', !!realtime);
+      
+      // Try to get connection status
+      setTimeout(() => {
+        const isConnected = realtime.isConnected();
+        console.log('[Supabase] Realtime connection status:', isConnected ? '✅ Connected' : '❌ Not connected');
+        if (!isConnected) {
+          console.warn('[Supabase] ⚠️ Realtime not connected. This may cause issues.');
+          console.warn('[Supabase] Make sure Realtime is enabled in:');
+          console.warn('[Supabase]   1. Supabase Dashboard → Settings → API → Enable Realtime');
+          console.warn('[Supabase]   2. Supabase Dashboard → Database → Replication (if using table-based)');
+        }
+      }, 1000);
     } catch (err: any) {
       console.warn('[Supabase] ⚠️ Client initialization issue:', err?.message);
     }

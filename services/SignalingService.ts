@@ -20,25 +20,41 @@ class SignalingService {
   }
 
   public async connect(roomId: string): Promise<void> {
+    // Disconnect any existing channel first
     if (this.channel) {
+      console.log('[Signaling] Disconnecting existing channel before reconnecting');
       await this.disconnect();
+      // Wait a bit for cleanup
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
+    
     this.roomId = roomId;
     this.isSubscribed = false;
 
     console.log(`[Signaling] Connecting to room: ${roomId}`);
 
+    // Verify Supabase Realtime is available
+    const realtimeStatus = supabase.realtime.isConnected();
+    console.log('[Signaling] Realtime connection status:', realtimeStatus);
+
     // Create a unique channel for the room
     // Use a simpler channel name format that's more reliable
     const channelName = `room-${roomId}`;
-    this.channel = supabase.channel(channelName, {
-      config: {
-        broadcast: {
-          self: false, // Do not receive our own messages
-          ack: false, // Don't wait for acknowledgment
+    
+    try {
+      this.channel = supabase.channel(channelName, {
+        config: {
+          broadcast: {
+            self: false, // Do not receive our own messages
+            ack: false, // Don't wait for acknowledgment
+          },
         },
-      },
-    });
+      });
+      console.log('[Signaling] Channel created:', channelName);
+    } catch (err) {
+      console.error('[Signaling] Failed to create channel:', err);
+      throw new Error('Failed to create channel. Check Supabase Realtime configuration.');
+    }
 
     // Listen for the 'signal' event
     this.channel.on('broadcast', { event: 'signal' }, (payload) => {
@@ -52,14 +68,26 @@ class SignalingService {
       const timeout = setTimeout(() => {
         console.error('[Signaling] Subscription timeout after 10 seconds');
         console.error('[Signaling] Channel state:', this.channel?.state);
+        console.error('[Signaling] Realtime connected:', supabase.realtime.isConnected());
         reject(new Error('Subscription timeout'));
       }, 10000);
 
       let subscriptionAttempted = false;
+      let hasReceivedStatus = false;
 
-      this.channel!
+      // Store reference to prevent cleanup issues
+      const currentChannel = this.channel;
+
+      if (!currentChannel) {
+        reject(new Error('Channel is null'));
+        return;
+      }
+
+      currentChannel
         .subscribe((status, err) => {
+          hasReceivedStatus = true;
           console.log(`[Signaling] Subscription status: ${status}`, err ? `Error: ${err}` : '');
+          console.log(`[Signaling] Channel state: ${currentChannel.state}`);
           
           if (!subscriptionAttempted) {
             subscriptionAttempted = true;
@@ -88,18 +116,25 @@ class SignalingService {
             this.isSubscribed = false;
             reject(new Error('Subscription timed out. Check if Supabase Realtime is enabled.'));
           } else if (status === 'CLOSED') {
-            clearTimeout(timeout);
-            console.error(`[Signaling] ❌ Channel closed immediately`);
-            console.error('[Signaling] Common causes:');
-            console.error('  1. Invalid Supabase credentials (check Vercel env vars)');
-            console.error('  2. Realtime not enabled in Supabase project');
-            console.error('  3. Supabase project is paused or deleted');
-            console.error('  4. Network/firewall blocking WebSocket connection');
-            if (err) {
-              console.error('[Signaling] Error details:', err);
+            // Only reject if we haven't successfully subscribed first
+            // CLOSED can be called during cleanup, so we need to be careful
+            if (!this.isSubscribed && hasReceivedStatus) {
+              clearTimeout(timeout);
+              console.error(`[Signaling] ❌ Channel closed immediately`);
+              console.error('[Signaling] This usually means:');
+              console.error('  1. Realtime is not enabled in Supabase project');
+              console.error('  2. Check Supabase Dashboard → Database → Replication');
+              console.error('  3. Ensure "Enable Realtime" toggle is ON');
+              console.error('  4. Your project might be paused (check Supabase dashboard)');
+              if (err) {
+                console.error('[Signaling] Error details:', err);
+              }
+              this.isSubscribed = false;
+              reject(new Error('Channel closed immediately. Check Supabase Realtime settings in Database → Replication.'));
+            } else {
+              // CLOSED during cleanup is normal, just log it
+              console.log('[Signaling] Channel closed (cleanup)');
             }
-            this.isSubscribed = false;
-            reject(new Error('Channel closed. Verify Supabase credentials and Realtime settings.'));
           }
         });
     });
@@ -168,8 +203,26 @@ class SignalingService {
   }
 
   public async disconnect() {
+    // Don't disconnect if we're in the middle of subscribing
+    if (this.subscriptionPromise && !this.isSubscribed) {
+      console.log('[Signaling] Waiting for subscription to complete before disconnecting...');
+      try {
+        // Wait a short time for subscription, but don't block forever
+        await Promise.race([
+          this.subscriptionPromise,
+          new Promise(resolve => setTimeout(resolve, 1000))
+        ]);
+      } catch (err) {
+        // Ignore errors during cleanup
+      }
+    }
+
     if (this.channel) {
-      await supabase.removeChannel(this.channel);
+      try {
+        await supabase.removeChannel(this.channel);
+      } catch (err) {
+        console.warn('[Signaling] Error removing channel:', err);
+      }
       this.channel = null;
     }
     this.listeners = [];
