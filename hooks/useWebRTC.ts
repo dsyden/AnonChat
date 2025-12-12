@@ -19,6 +19,7 @@ export const useWebRTC = (roomId: string) => {
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const isConnectedRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
+  const processedJoinsRef = useRef<Set<string>>(new Set()); // Track processed join messages
   
   // Initialize Peer Connection
   const createPeerConnection = useCallback(() => {
@@ -172,6 +173,25 @@ export const useWebRTC = (roomId: string) => {
               break;
             }
             
+            // Deduplicate: ignore if we've already processed this join
+            const joinKey = `${msg.senderId}-${roomId}`;
+            if (processedJoinsRef.current.has(joinKey)) {
+              console.log(`[Signaling] Already processed join from ${msg.senderId}, ignoring duplicate`);
+              break;
+            }
+            
+            // If we're already connecting or connected, ignore duplicate joins
+            if (isConnectingRef.current || isConnectedRef.current) {
+              console.log('[Signaling] Already connecting/connected, ignoring join');
+              break;
+            }
+            
+            // Mark as processed
+            processedJoinsRef.current.add(joinKey);
+            
+            // Stop periodic resend since we got a response
+            clearInterval(joinResendInterval);
+            
             // Polite peer strategy: user with smaller ID becomes the "polite" peer (answers)
             // User with larger ID becomes the "impolite" peer (creates offer)
             const otherUserId = msg.senderId;
@@ -190,6 +210,7 @@ export const useWebRTC = (roomId: string) => {
             
             if (isInProgress) {
               console.log(`[Signaling] Connection already in progress (state: ${pc.signalingState}), ignoring join`);
+              processedJoinsRef.current.delete(joinKey); // Allow retry if connection fails
               break;
             }
             
@@ -348,6 +369,10 @@ export const useWebRTC = (roomId: string) => {
               remoteStreamRef.current = null;
             }
             setRemoteStream(null);
+            
+            // Reset connection state refs
+            isConnectedRef.current = false;
+            isConnectingRef.current = false;
             setPeerState({ isConnected: false, isConnecting: false, error: 'Peer disconnected' });
             
             // Clean up peer connection
@@ -366,6 +391,10 @@ export const useWebRTC = (roomId: string) => {
             // Reset state for next person
             hasRemoteDescriptionRef.current = false;
             pendingIceCandidatesRef.current = [];
+            
+            // Reset resend counter for next connection attempt
+            resendCount = 0;
+            processedJoinsRef.current.clear(); // Clear processed joins for next connection
             
             // Create new peer connection for next person
             console.log('[Signaling] Ready for next peer to join');
@@ -414,12 +443,19 @@ export const useWebRTC = (roomId: string) => {
     
     // Also set up a periodic join message resend in case the other person missed it
     // This helps when the first person joins before the second person subscribes
+    // Stop after 10 seconds to avoid spam
+    let resendCount = 0;
+    const maxResends = 5; // 5 resends = 10 seconds
     const joinResendInterval = setInterval(() => {
-      if (isMounted && !isConnectedRef.current && !isConnectingRef.current) {
-        console.log('[Signaling] Resending join message (no connection yet)...');
+      if (isMounted && !isConnectedRef.current && !isConnectingRef.current && resendCount < maxResends) {
+        resendCount++;
+        console.log(`[Signaling] Resending join message (attempt ${resendCount}/${maxResends})...`);
         signalingService.send({ type: 'join' }).catch(err => {
           console.warn('[Signaling] Failed to resend join:', err);
         });
+      } else if (isConnectingRef.current || isConnectedRef.current) {
+        // Stop resending if we're connecting or connected
+        clearInterval(joinResendInterval);
       }
     }, 2000); // Resend every 2 seconds if not connected
 
@@ -463,6 +499,9 @@ export const useWebRTC = (roomId: string) => {
       // Reset state
       pendingIceCandidatesRef.current = [];
       hasRemoteDescriptionRef.current = false;
+      processedJoinsRef.current.clear();
+      isConnectedRef.current = false;
+      isConnectingRef.current = false;
       setRemoteStream(null);
       setPeerState({ isConnected: false, isConnecting: false, error: null });
       
