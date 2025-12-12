@@ -26,39 +26,25 @@ export interface UserMediaState {
   error: string | null;
 }
 
-// Free TURN servers for production (may have rate limits)
+// ICE servers for WebRTC
+// STUN servers help with NAT traversal, TURN servers help with strict firewalls
 // For production, consider using a paid TURN service like Twilio, Metered, or Cloudflare
 const getIceServers = () => {
   const servers: RTCIceServer[] = [
-    // STUN servers
+    // STUN servers (no authentication required)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
   ];
 
-  // Add free TURN servers (these may have rate limits)
-  // Option 1: OpenRelay (free, no auth)
+  // OpenRelay TURN server (free, no authentication required)
+  // Note: This may have rate limits. For production, use a paid service.
   servers.push({
     urls: [
       'turn:openrelay.metered.ca:80',
       'turn:openrelay.metered.ca:443',
       'turn:openrelay.metered.ca:443?transport=tcp',
-    ],
-  });
-
-  // Option 2: FreeTURN (free, no auth)
-  servers.push({
-    urls: [
-      'turn:freeturn.net:3478',
-      'turn:freeturn.net:3478?transport=tcp',
-    ],
-  });
-
-  // Option 3: OpenRelay alternative
-  servers.push({
-    urls: [
-      'turn:relay.metered.ca:80',
-      'turn:relay.metered.ca:443',
-      'turn:relay.metered.ca:443?transport=tcp',
     ],
   });
 
