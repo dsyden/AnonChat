@@ -16,6 +16,7 @@ export const useWebRTC = (roomId: string) => {
   const pendingIceCandidatesRef = useRef<RTCIceCandidate[]>([]);
   const hasRemoteDescriptionRef = useRef<boolean>(false);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   
   // Initialize Peer Connection
   const createPeerConnection = useCallback(() => {
@@ -25,6 +26,7 @@ export const useWebRTC = (roomId: string) => {
     const pc = new RTCPeerConnection(STUN_SERVERS);
     hasRemoteDescriptionRef.current = false;
     pendingIceCandidatesRef.current = [];
+    remoteStreamRef.current = null; // Reset remote stream when creating new connection
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -36,8 +38,30 @@ export const useWebRTC = (roomId: string) => {
     };
 
     pc.ontrack = (event) => {
-      console.log('[WebRTC] Received remote track');
-      setRemoteStream(event.streams[0]);
+      console.log('[WebRTC] Received remote track:', event.track.kind, event.track.id, 'enabled:', event.track.enabled);
+      console.log('[WebRTC] Streams in event:', event.streams.length);
+      
+      // Get or create remote stream
+      let stream = remoteStreamRef.current;
+      if (!stream) {
+        console.log('[WebRTC] Creating new remote stream');
+        stream = new MediaStream();
+        remoteStreamRef.current = stream;
+      }
+      
+      // Add the track to the stream if it's not already there
+      const existingTrack = stream.getTracks().find(t => t.id === event.track.id);
+      if (!existingTrack) {
+        console.log('[WebRTC] Adding track to remote stream');
+        stream.addTrack(event.track);
+      } else {
+        console.log('[WebRTC] Track already in stream, replacing');
+        stream.removeTrack(existingTrack);
+        stream.addTrack(event.track);
+      }
+      
+      console.log('[WebRTC] Remote stream now has tracks:', stream.getTracks().map(t => `${t.kind}:${t.id}:${t.enabled ? 'enabled' : 'disabled'}`));
+      setRemoteStream(stream);
     };
 
     pc.onconnectionstatechange = () => {
@@ -345,6 +369,7 @@ export const useWebRTC = (roomId: string) => {
       }
       pendingIceCandidatesRef.current = [];
       hasRemoteDescriptionRef.current = false;
+      remoteStreamRef.current = null;
     };
   }, [roomId]); // Removed createPeerConnection from deps to prevent re-renders
 
